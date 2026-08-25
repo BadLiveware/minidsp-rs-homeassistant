@@ -1323,7 +1323,7 @@ wheels = [
 ]
 
 [[package]]
-name = "minidsp-rs-ha"
+name = "minidsp-rs-homeassistant"
 version = "0.1.0"
 source = { virtual = "." }
 

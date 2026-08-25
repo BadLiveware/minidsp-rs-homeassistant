@@ -39,7 +39,7 @@ Until the integration is included in the default HACS catalog:
 
 1. Open HACS in Home Assistant.
 2. Open the menu and select **Custom repositories**.
-3. Add `https://github.com/BadLiveware/minidsp-rs-ha` as an **Integration** repository.
+3. Add `https://github.com/BadLiveware/minidsp-rs-homeassistant` as an **Integration** repository.
 4. Search for **miniDSP-rs** and download it.
 5. Restart Home Assistant.
 
@@ -64,7 +64,22 @@ Use **Reconfigure** on the integration entry if the daemon address changes. The 
 | Input level sensors | Disabled | Per-channel input meter in dBFS |
 | Output level sensors | Disabled | Per-channel output meter in dBFS |
 
-Home Assistant represents media-player volume from 0 to 1. The integration maps that range linearly to the MiniDSP master range of -127 dB to 0 dB and exposes the exact value as the media player's `volume_db` attribute.
+### Useful volume range
+
+Home Assistant represents media-player volume from 0% to 100%, while much of a MiniDSP's full -127 dB to 0 dB range is usually silent or too loud for a specific system. The integration therefore defaults to this scoped nonlinear mapping:
+
+```text
+gain = -90 dB + 80 dB × volume^0.415
+```
+
+This maps 0% to -90 dB, 50% to -30 dB, and 100% to a safe default maximum of -10 dB. Open the integration entry and select **Configure** to set the minimum and maximum gain, then choose one of two curve editors:
+
+- **Exponent curve:** retain the logarithmic-like formula and adjust one exponent. `1` is linear; values below `1` raise the quiet end faster.
+- **Five-point curve:** set gain independently at 25%, 50%, and 75%. The configured minimum and maximum provide the 0% and 100% points. A smooth, monotonic curve connects all five points.
+
+The scoped range and curve shape are separate: changing the minimum or maximum changes the safe operating range, while the selected curve controls how the volume slider moves through it.
+
+The optional 0%-volume mute moves the device to the configured minimum without sending a hardware mute command, then restores the previous gain when unmuted. This can avoid popping on systems where MiniDSP hardware mute is audible. The exact current gain and active mapping are available through the media player's volume attributes, including `volume_db`, `volume_curve_mode`, and the configured range and control points.
 
 The source list is derived from the hardware and DSP revision reported by `minidspd`. Advanced DSP configuration—routing, PEQ, crossovers, FIR, compressors, and per-channel settings—is outside the initial integration scope because the daemon status endpoint does not expose dependable readback for those settings.
 

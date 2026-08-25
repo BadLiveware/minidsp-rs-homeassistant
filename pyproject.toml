@@ -1,5 +1,5 @@
 [project]
-name = "minidsp-rs-ha"
+name = "minidsp-rs-homeassistant"
 version = "0.1.0"
 description = "Home Assistant custom integration for minidsp-rs"
 readme = "README.md"

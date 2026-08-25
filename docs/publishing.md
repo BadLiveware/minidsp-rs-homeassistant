@@ -4,7 +4,7 @@ This repository is structured for installation as a HACS integration. Publishing
 
 ## Prepare the GitHub repository
 
-1. Create the public repository `BadLiveware/minidsp-rs-ha` and push the `main` branch.
+1. Create the public repository `BadLiveware/minidsp-rs-homeassistant` and push the `main` branch.
 2. Add a concise repository description, such as `Home Assistant integration for MiniDSP devices managed by minidsp-rs`.
 3. Enable GitHub Issues.
 4. Add searchable topics such as `home-assistant`, `hacs`, `minidsp`, `minidsp-rs`, `custom-component`, and `home-automation`.
@@ -52,7 +52,7 @@ Before submitting:
 - Confirm at least one GitHub release exists.
 - Confirm the repository has a description, topics, enabled issues, README, `hacs.json`, valid integration manifest, and `brand/icon.png`.
 
-Fork [`hacs/default`](https://github.com/hacs/default), create a branch from `master`, add `BadLiveware/minidsp-rs-ha` alphabetically to the `integration` file, and open a pull request using the repository's template. The pull request must be opened by the repository owner or a major contributor and must allow maintainer edits.
+Fork [`hacs/default`](https://github.com/hacs/default), create a branch from `master`, add `BadLiveware/minidsp-rs-homeassistant` alphabetically to the `integration` file, and open a pull request using the repository's template. The pull request must be opened by the repository owner or a major contributor and must allow maintainer edits.
 
 Review may take time. Custom-repository installation remains available while the inclusion request is pending.
 

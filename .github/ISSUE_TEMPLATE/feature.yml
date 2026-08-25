@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an improvement to the miniDSP-rs integration
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: input
+    id: hardware
+    attributes:
+      label: MiniDSP model
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Describe the Home Assistant behavior or automation this would enable.
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: minidsp-rs API support
+      description: Link to or describe the daemon endpoint that can read and write this state, if known.

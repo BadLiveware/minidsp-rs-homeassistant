@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a problem with the miniDSP-rs integration
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Before reporting, confirm the DSP appears in the minidspd `/devices` endpoint.
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: input
+    id: minidsp_version
+    attributes:
+      label: minidsp-rs version
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: MiniDSP model
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem description
+      description: Describe the expected and actual behavior and how to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or diagnostics
+      description: Remove private network addresses or other sensitive information before posting.
+      render: text

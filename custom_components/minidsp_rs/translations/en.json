@@ -1,0 +1,68 @@
+{
+  "title": "miniDSP-rs",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to minidspd",
+        "description": "Enter the URL of a minidspd HTTP server reachable from Home Assistant.",
+        "data": {
+          "url": "Daemon URL"
+        },
+        "data_description": {
+          "url": "For example, http://192.168.1.20:5380"
+        }
+      },
+      "device": {
+        "title": "Select a MiniDSP device",
+        "description": "Choose the DSP to add. Run this setup again to add another device from the same daemon.",
+        "data": {
+          "device_id": "Device"
+        }
+      },
+      "reconfigure": {
+        "title": "Update the minidspd connection",
+        "description": "Enter a new daemon URL. The configured DSP must be available at the new endpoint.",
+        "data": {
+          "url": "Daemon URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to minidspd.",
+      "device_not_found": "The configured MiniDSP device was not found at this endpoint.",
+      "invalid_url": "Enter a valid HTTP or HTTPS URL.",
+      "no_devices": "minidspd did not report any devices."
+    },
+    "abort": {
+      "already_configured": "This MiniDSP device is already configured.",
+      "discovery_expired": "Device discovery expired. Start setup again.",
+      "reconfigure_successful": "The minidspd connection was updated."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "input_level": {
+        "name": "Input {channel} level"
+      },
+      "output_level": {
+        "name": "Output {channel} level"
+      }
+    },
+    "switch": {
+      "dirac_live": {
+        "name": "Dirac Live"
+      }
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "The command could not be sent to the MiniDSP device."
+    },
+    "invalid_preset": {
+      "message": "{preset} is not a valid MiniDSP preset."
+    },
+    "invalid_source": {
+      "message": "{source} is not a valid input source for this MiniDSP device."
+    }
+  }
+}

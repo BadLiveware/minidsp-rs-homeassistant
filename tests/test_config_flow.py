@@ -11,9 +11,19 @@ from custom_components.minidsp_rs.api import MiniDSPConnectionError
 from custom_components.minidsp_rs.const import (
     CONF_DEVICE_ID,
     CONF_DEVICE_URL,
+    CONF_MUTE_WITH_VOLUME,
     CONF_PRODUCT_NAME,
     CONF_SERIAL,
+    CONF_VOLUME_CURVE,
+    CONF_VOLUME_CURVE_MODE,
+    CONF_VOLUME_MAX_DB,
+    CONF_VOLUME_MIN_DB,
+    CONF_VOLUME_POINT_25_DB,
+    CONF_VOLUME_POINT_50_DB,
+    CONF_VOLUME_POINT_75_DB,
     DOMAIN,
+    VOLUME_CURVE_MODE_EXPONENT,
+    VOLUME_CURVE_MODE_FIVE_POINT,
 )
 from custom_components.minidsp_rs.models import MiniDSPDevice, MiniDSPVersion
 
@@ -162,6 +172,115 @@ async def test_reconfigure_updates_endpoint(hass: HomeAssistant) -> None:
     assert result["type"] is data_entry_flow.FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.data[CONF_URL] == "http://new:5380"
+
+
+async def test_volume_options_flow(hass: HomeAssistant) -> None:
+    """Volume scope and soft mute can be configured without YAML."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="2x4HD (900001)",
+        unique_id="serial:900001",
+        data={CONF_URL: "http://minidsp:5380"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    range_options = {
+        CONF_VOLUME_MIN_DB: -80.0,
+        CONF_VOLUME_MAX_DB: -15.0,
+        CONF_VOLUME_CURVE_MODE: VOLUME_CURVE_MODE_EXPONENT,
+        CONF_MUTE_WITH_VOLUME: True,
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        range_options,
+    )
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "exponent"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_VOLUME_CURVE: 0.5},
+    )
+
+    assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert entry.options.items() >= (range_options | {CONF_VOLUME_CURVE: 0.5}).items()
+
+
+async def test_volume_options_reject_invalid_range(hass: HomeAssistant) -> None:
+    """Volume scope must remain ordered and within device limits."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="2x4HD (900001)",
+        unique_id="serial:900001",
+        data={CONF_URL: "http://minidsp:5380"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_VOLUME_MIN_DB: -10.0,
+            CONF_VOLUME_MAX_DB: -90.0,
+            CONF_VOLUME_CURVE_MODE: VOLUME_CURVE_MODE_EXPONENT,
+            CONF_MUTE_WITH_VOLUME: False,
+        },
+    )
+
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_volume_profile"}
+
+
+async def test_five_point_options_flow(hass: HomeAssistant) -> None:
+    """Five-point mode validates and saves its three editable anchors."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="2x4HD (900001)",
+        unique_id="serial:900001",
+        data={CONF_URL: "http://minidsp:5380"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_VOLUME_MIN_DB: -90.0,
+            CONF_VOLUME_MAX_DB: -10.0,
+            CONF_VOLUME_CURVE_MODE: VOLUME_CURVE_MODE_FIVE_POINT,
+            CONF_MUTE_WITH_VOLUME: True,
+        },
+    )
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "five_point"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_VOLUME_POINT_25_DB: -55.0,
+            CONF_VOLUME_POINT_50_DB: -60.0,
+            CONF_VOLUME_POINT_75_DB: -20.0,
+        },
+    )
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_volume_profile"}
+
+    points = {
+        CONF_VOLUME_POINT_25_DB: -55.0,
+        CONF_VOLUME_POINT_50_DB: -32.0,
+        CONF_VOLUME_POINT_75_DB: -18.0,
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        points,
+    )
+    assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert entry.options.items() >= points.items()
+    assert entry.options[CONF_VOLUME_CURVE_MODE] == VOLUME_CURVE_MODE_FIVE_POINT
 
 
 async def test_reconfigure_requires_same_device(hass: HomeAssistant) -> None:

@@ -39,6 +39,53 @@
       "reconfigure_successful": "The minidspd connection was updated."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Volume range and curve",
+        "description": "The minimum and maximum define the scoped MiniDSP gain range. The curve controls how Home Assistant's 0–100% volume moves through that range.",
+        "data": {
+          "volume_min_db": "Minimum volume",
+          "volume_max_db": "Maximum volume",
+          "volume_curve_mode": "Curve editor",
+          "mute_with_volume": "Use 0% volume instead of hardware mute"
+        },
+        "data_description": {
+          "volume_min_db": "Gain sent at 0% volume.",
+          "volume_max_db": "Gain sent at 100% volume. Use a safe upper limit for your system.",
+          "volume_curve_mode": "Choose the simple exponent curve or tune gain independently at five fixed volume points.",
+          "mute_with_volume": "Moves the volume to the configured minimum and restores it when unmuted, avoiding the MiniDSP hardware mute command."
+        }
+      },
+      "exponent": {
+        "title": "Exponent curve",
+        "description": "One exponent shapes the full scoped range. Values below 1 provide more gain change at the quiet end; 1 is linear.",
+        "data": {
+          "volume_curve": "Curve exponent"
+        },
+        "data_description": {
+          "volume_curve": "Use 0.415 for the recommended logarithmic-like default or 1 for linear scaling."
+        }
+      },
+      "five_point": {
+        "title": "Five-point curve",
+        "description": "Set the gain at 25%, 50%, and 75%. The configured minimum and maximum supply the 0% and 100% points. The integration draws a smooth, monotonic curve through all five points.",
+        "data": {
+          "volume_point_25_db": "Gain at 25%",
+          "volume_point_50_db": "Gain at 50%",
+          "volume_point_75_db": "Gain at 75%"
+        },
+        "data_description": {
+          "volume_point_25_db": "Must be above the minimum and below the 50% point.",
+          "volume_point_50_db": "Must be between the 25% and 75% points.",
+          "volume_point_75_db": "Must be above the 50% point and below the maximum."
+        }
+      }
+    },
+    "error": {
+      "invalid_volume_profile": "Minimum, curve points, and maximum must increase in that order, stay within -127 to 0 dB, and use a positive exponent."
+    }
+  },
   "entity": {
     "sensor": {
       "input_level": {

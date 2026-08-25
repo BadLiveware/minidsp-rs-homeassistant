@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from homeassistant.components.media_player import (
@@ -9,20 +10,21 @@ from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
+    CONF_MUTE_WITH_VOLUME,
+    DEFAULT_MUTE_WITH_VOLUME,
     DOMAIN,
-    MAX_VOLUME_DB,
-    MIN_VOLUME_DB,
     PRESET_NAMES,
     SOURCE_LABELS,
-    VOLUME_STEP_DB,
+    VOLUME_STEP,
 )
 from .data import MiniDSPConfigEntry
 from .entity import MiniDSPEntity
+from .volume import VolumeProfile
 
 
 class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
@@ -36,11 +38,17 @@ class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
         | MediaPlayerEntityFeature.VOLUME_MUTE
         | MediaPlayerEntityFeature.SELECT_SOUND_MODE
     )
-    _attr_volume_step = VOLUME_STEP_DB / (MAX_VOLUME_DB - MIN_VOLUME_DB)
+    _attr_volume_step = VOLUME_STEP
 
     def __init__(self, entry: MiniDSPConfigEntry) -> None:
         """Initialize the media player."""
         super().__init__(entry.runtime_data.coordinator, "media_player")
+        self._volume_profile = VolumeProfile.from_options(entry.options)
+        self._mute_with_volume = bool(
+            entry.options.get(CONF_MUTE_WITH_VOLUME, DEFAULT_MUTE_WITH_VOLUME)
+        )
+        self._soft_muted = False
+        self._volume_before_soft_mute: float | None = None
         if self.coordinator.data.device.available_sources():
             self._attr_supported_features |= MediaPlayerEntityFeature.SELECT_SOURCE
 
@@ -50,15 +58,12 @@ class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
         volume = self.coordinator.data.status.master.volume
         if volume is None:
             return None
-        return min(
-            1.0,
-            max(0.0, (volume - MIN_VOLUME_DB) / (MAX_VOLUME_DB - MIN_VOLUME_DB)),
-        )
+        return self._volume_profile.db_to_level(volume)
 
     @property
     def is_volume_muted(self) -> bool | None:
         """Return the master mute state."""
-        return self.coordinator.data.status.master.mute
+        return self._soft_muted or self.coordinator.data.status.master.mute
 
     @property
     def source(self) -> str | None:
@@ -90,14 +95,45 @@ class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
         return list(PRESET_NAMES)
 
     async def async_set_volume_level(self, volume: float) -> None:
-        """Set master volume from Home Assistant's normalized range."""
-        clamped = min(1.0, max(0.0, volume))
-        gain = MIN_VOLUME_DB + clamped * (MAX_VOLUME_DB - MIN_VOLUME_DB)
-        await self.coordinator.async_set_master_status(volume=round(gain, 1))
+        """Set master volume using the configured useful dB range."""
+        gain = self._volume_profile.level_to_db(volume)
+        await self.coordinator.async_set_master_status(volume=gain)
+        self._soft_muted = False
+        self._volume_before_soft_mute = None
+        self.async_write_ha_state()
 
     async def async_mute_volume(self, mute: bool) -> None:
-        """Set master mute."""
-        await self.coordinator.async_set_master_status(mute=mute)
+        """Mute using hardware mute or the configured zero-volume behavior."""
+        if not self._mute_with_volume:
+            await self.coordinator.async_set_master_status(mute=mute)
+            return
+
+        master = self.coordinator.data.status.master
+        if mute:
+            if self.is_volume_muted:
+                return
+            if master.volume is not None and not math.isclose(
+                master.volume,
+                self._volume_profile.min_db,
+                abs_tol=0.05,
+            ):
+                self._volume_before_soft_mute = master.volume
+            await self.coordinator.async_set_master_status(
+                volume=self._volume_profile.min_db
+            )
+            self._soft_muted = True
+            self.async_write_ha_state()
+            return
+
+        if self._soft_muted:
+            restore_volume = self._volume_before_soft_mute
+            if restore_volume is not None:
+                await self.coordinator.async_set_master_status(volume=restore_volume)
+            self._soft_muted = False
+            self._volume_before_soft_mute = None
+            self.async_write_ha_state()
+        elif master.mute:
+            await self.coordinator.async_set_master_status(mute=False)
 
     async def async_select_source(self, source: str) -> None:
         """Select an input source."""
@@ -125,11 +161,39 @@ class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
             ) from err
         await self.coordinator.async_set_master_status(preset=preset)
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Clear soft mute when another controller changes the volume."""
+        volume = self.coordinator.data.status.master.volume
+        if (
+            self._soft_muted
+            and volume is not None
+            and not math.isclose(
+                volume,
+                self._volume_profile.min_db,
+                abs_tol=0.05,
+            )
+        ):
+            self._soft_muted = False
+            self._volume_before_soft_mute = None
+        super()._handle_coordinator_update()
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return MiniDSP-specific master state."""
+        """Return MiniDSP-specific master and volume-profile state."""
         volume = self.coordinator.data.status.master.volume
-        return {"volume_db": volume}
+        point_25, point_50, point_75 = self._volume_profile.points_db[1:-1]
+        return {
+            "volume_db": volume,
+            "volume_min_db": self._volume_profile.min_db,
+            "volume_max_db": self._volume_profile.max_db,
+            "volume_curve_mode": self._volume_profile.mode,
+            "volume_curve": self._volume_profile.curve,
+            "volume_point_25_db": round(point_25, 1),
+            "volume_point_50_db": round(point_50, 1),
+            "volume_point_75_db": round(point_75, 1),
+            "mute_with_volume": self._mute_with_volume,
+        }
 
 
 async def async_setup_entry(

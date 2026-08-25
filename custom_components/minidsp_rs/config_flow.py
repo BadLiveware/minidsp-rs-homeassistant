@@ -5,8 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_URL
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -14,12 +20,32 @@ from .api import MiniDSPClient, MiniDSPError, normalize_base_url
 from .const import (
     CONF_DEVICE_ID,
     CONF_DEVICE_URL,
+    CONF_MUTE_WITH_VOLUME,
     CONF_PRODUCT_NAME,
     CONF_SERIAL,
+    CONF_VOLUME_CURVE,
+    CONF_VOLUME_CURVE_MODE,
+    CONF_VOLUME_MAX_DB,
+    CONF_VOLUME_MIN_DB,
+    CONF_VOLUME_POINT_25_DB,
+    CONF_VOLUME_POINT_50_DB,
+    CONF_VOLUME_POINT_75_DB,
+    DEFAULT_MUTE_WITH_VOLUME,
+    DEFAULT_VOLUME_CURVE,
+    DEFAULT_VOLUME_CURVE_MODE,
+    DEFAULT_VOLUME_MAX_DB,
+    DEFAULT_VOLUME_MIN_DB,
+    DEVICE_MAX_VOLUME_DB,
+    DEVICE_MIN_VOLUME_DB,
     DOMAIN,
     LOGGER,
+    MAX_VOLUME_CURVE,
+    MIN_VOLUME_CURVE,
+    VOLUME_CURVE_MODE_EXPONENT,
+    VOLUME_CURVE_MODE_FIVE_POINT,
 )
 from .models import MiniDSPDevice
+from .volume import VolumeProfile
 
 
 class MiniDSPConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -31,6 +57,14 @@ class MiniDSPConfigFlow(ConfigFlow, domain=DOMAIN):
         """Initialize the flow."""
         self._base_url: str | None = None
         self._devices: tuple[MiniDSPDevice, ...] = ()
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        _config_entry: ConfigEntry,
+    ) -> MiniDSPOptionsFlow:
+        """Create the options flow."""
+        return MiniDSPOptionsFlow()
 
     async def async_step_user(
         self,
@@ -177,6 +211,196 @@ class MiniDSPConfigFlow(ConfigFlow, domain=DOMAIN):
             title=device.display_label(),
             data=_entry_data(self._base_url, device),
         )
+
+
+class MiniDSPOptionsFlow(OptionsFlowWithReload):
+    """Configure the useful media-player volume range and curve."""
+
+    _pending_options: dict[str, Any]
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure the range and choose a curve editor."""
+        current = _default_volume_options() | dict(self.config_entry.options)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            pending = current | user_input
+            try:
+                VolumeProfile.from_options(
+                    pending | {CONF_VOLUME_CURVE_MODE: VOLUME_CURVE_MODE_EXPONENT}
+                )
+            except ValueError:
+                errors["base"] = "invalid_volume_profile"
+            else:
+                self._pending_options = pending
+                if pending[CONF_VOLUME_CURVE_MODE] == VOLUME_CURVE_MODE_FIVE_POINT:
+                    return await self.async_step_five_point()
+                return await self.async_step_exponent()
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                _volume_range_schema(),
+                current if user_input is None else user_input,
+            ),
+            errors=errors,
+        )
+
+    async def async_step_exponent(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure the exponent curve."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            options = self._pending_options | user_input
+            try:
+                VolumeProfile.from_options(options)
+            except ValueError:
+                errors["base"] = "invalid_volume_profile"
+            else:
+                return self.async_create_entry(data=options)
+
+        return self.async_show_form(
+            step_id="exponent",
+            data_schema=self.add_suggested_values_to_schema(
+                _exponent_schema(),
+                self._pending_options if user_input is None else user_input,
+            ),
+            errors=errors,
+        )
+
+    async def async_step_five_point(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure the three editable points of the five-point curve."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            options = self._pending_options | user_input
+            try:
+                VolumeProfile.from_options(options)
+            except ValueError:
+                errors["base"] = "invalid_volume_profile"
+            else:
+                return self.async_create_entry(data=options)
+
+        suggestions = _five_point_suggestions(self._pending_options)
+        if user_input is not None:
+            suggestions.update(user_input)
+        return self.async_show_form(
+            step_id="five_point",
+            data_schema=self.add_suggested_values_to_schema(
+                _five_point_schema(self._pending_options),
+                suggestions,
+            ),
+            errors=errors,
+        )
+
+
+def _default_volume_options() -> dict[str, Any]:
+    """Return complete backward-compatible volume defaults."""
+    profile = VolumeProfile()
+    point_25, point_50, point_75 = profile.points_db[1:-1]
+    return {
+        CONF_VOLUME_MIN_DB: DEFAULT_VOLUME_MIN_DB,
+        CONF_VOLUME_MAX_DB: DEFAULT_VOLUME_MAX_DB,
+        CONF_VOLUME_CURVE_MODE: DEFAULT_VOLUME_CURVE_MODE,
+        CONF_VOLUME_CURVE: DEFAULT_VOLUME_CURVE,
+        CONF_VOLUME_POINT_25_DB: round(point_25, 1),
+        CONF_VOLUME_POINT_50_DB: round(point_50, 1),
+        CONF_VOLUME_POINT_75_DB: round(point_75, 1),
+        CONF_MUTE_WITH_VOLUME: DEFAULT_MUTE_WITH_VOLUME,
+    }
+
+
+def _volume_range_schema() -> vol.Schema:
+    """Return the range and curve-mode schema."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_VOLUME_MIN_DB): _db_selector(
+                DEVICE_MIN_VOLUME_DB, DEVICE_MAX_VOLUME_DB
+            ),
+            vol.Required(CONF_VOLUME_MAX_DB): _db_selector(
+                DEVICE_MIN_VOLUME_DB, DEVICE_MAX_VOLUME_DB
+            ),
+            vol.Required(CONF_VOLUME_CURVE_MODE): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(
+                            value=VOLUME_CURVE_MODE_EXPONENT,
+                            label="Exponent curve",
+                        ),
+                        selector.SelectOptionDict(
+                            value=VOLUME_CURVE_MODE_FIVE_POINT,
+                            label="Five-point curve",
+                        ),
+                    ]
+                )
+            ),
+            vol.Required(CONF_MUTE_WITH_VOLUME): selector.BooleanSelector(),
+        }
+    )
+
+
+def _exponent_schema() -> vol.Schema:
+    """Return the exponent-curve schema."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_VOLUME_CURVE): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=MIN_VOLUME_CURVE,
+                    max=MAX_VOLUME_CURVE,
+                    step=0.001,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+        }
+    )
+
+
+def _five_point_schema(options: dict[str, Any]) -> vol.Schema:
+    """Return controls for the 25%, 50%, and 75% curve points."""
+    min_db = float(options[CONF_VOLUME_MIN_DB])
+    max_db = float(options[CONF_VOLUME_MAX_DB])
+    return vol.Schema(
+        {
+            vol.Required(CONF_VOLUME_POINT_25_DB): _db_selector(min_db, max_db),
+            vol.Required(CONF_VOLUME_POINT_50_DB): _db_selector(min_db, max_db),
+            vol.Required(CONF_VOLUME_POINT_75_DB): _db_selector(min_db, max_db),
+        }
+    )
+
+
+def _five_point_suggestions(options: dict[str, Any]) -> dict[str, float]:
+    """Keep valid stored points or derive points from the exponent curve."""
+    try:
+        profile = VolumeProfile.from_options(options)
+    except ValueError:
+        profile = VolumeProfile.from_options(
+            options | {CONF_VOLUME_CURVE_MODE: VOLUME_CURVE_MODE_EXPONENT}
+        )
+    point_25, point_50, point_75 = profile.points_db[1:-1]
+    return {
+        CONF_VOLUME_POINT_25_DB: round(point_25, 1),
+        CONF_VOLUME_POINT_50_DB: round(point_50, 1),
+        CONF_VOLUME_POINT_75_DB: round(point_75, 1),
+    }
+
+
+def _db_selector(minimum: float, maximum: float) -> selector.NumberSelector:
+    """Return a dB number selector."""
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=minimum,
+            max=maximum,
+            step=0.5,
+            unit_of_measurement="dB",
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
 
 
 def _find_configured_device(

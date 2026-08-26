@@ -6,6 +6,9 @@ from datetime import timedelta
 DOMAIN = "minidsp_rs"
 LOGGER = logging.getLogger(__package__)
 
+CONF_AUDIO_SENSE_OFF_DELAY = "off_delay_minutes"
+CONF_AUDIO_SENSE_OUTPUTS = "audio_sense_outputs"
+CONF_AUDIO_SENSE_THRESHOLD = "threshold_dbfs"
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_URL = "device_url"
 CONF_PRODUCT_NAME = "product_name"
@@ -22,6 +25,10 @@ CONF_VOLUME_POINT_75_DB = "volume_point_75_db"
 DEFAULT_NAME = "miniDSP"
 DEFAULT_PORT = 5380
 UPDATE_INTERVAL = timedelta(seconds=5)
+
+DEFAULT_AUDIO_SENSE_THRESHOLD = -120.0
+DEFAULT_AUDIO_SENSE_OFF_DELAY = 15
+MAX_AUDIO_SENSE_OFF_DELAY = 1440
 
 DEVICE_MIN_VOLUME_DB = -127.0
 DEVICE_MAX_VOLUME_DB = 0.0

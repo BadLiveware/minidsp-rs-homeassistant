@@ -42,6 +42,12 @@
   "options": {
     "step": {
       "init": {
+        "menu_options": {
+          "volume": "Volume behavior",
+          "audio_sense": "Audio sensing"
+        }
+      },
+      "volume": {
         "title": "Volume range and curve",
         "description": "The minimum and maximum define the scoped MiniDSP gain range. The curve controls how Home Assistant's 0–100% volume moves through that range.",
         "data": {
@@ -80,13 +86,41 @@
           "volume_point_50_db": "Must be between the 25% and 75% points.",
           "volume_point_75_db": "Must be above the 50% point and below the maximum."
         }
+      },
+      "audio_sense": {
+        "title": "Audio sensing",
+        "description": "Select outputs that should expose an audio-detected binary sensor. Clear all outputs to disable audio sensing.",
+        "data": {
+          "audio_sense_outputs": "Outputs"
+        }
+      },
+      "audio_output": {
+        "title": "Audio sensing for output {output}",
+        "description": "Audio above the threshold turns the sensor on immediately. At or below the threshold, or unavailable level data, turns it off only after the inactivity delay.",
+        "data": {
+          "threshold_dbfs": "Audio threshold",
+          "off_delay_minutes": "Inactivity delay"
+        },
+        "data_description": {
+          "threshold_dbfs": "Output levels above this dBFS value count as active audio.",
+          "off_delay_minutes": "Minutes of continuous inactivity required before the sensor turns off."
+        }
       }
     },
     "error": {
+      "invalid_audio_sense": "Enter a threshold from -127 to 0 dBFS and an inactivity delay from 0 to 1440 minutes.",
       "invalid_volume_profile": "Minimum, curve points, and maximum must increase in that order, stay within -127 to 0 dB, and use a positive exponent."
+    },
+    "abort": {
+      "audio_sense_unavailable": "Output level data is unavailable. Reload the integration and try again."
     }
   },
   "entity": {
+    "binary_sensor": {
+      "audio_sense_output": {
+        "name": "Output {output} audio detected"
+      }
+    },
     "sensor": {
       "input_level": {
         "name": "Input {channel} level"

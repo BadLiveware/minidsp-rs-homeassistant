@@ -1,7 +1,9 @@
 """Integration setup and entity tests for miniDSP-rs."""
 
+from collections.abc import Callable
 from dataclasses import replace
-from unittest.mock import AsyncMock, patch
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.const import CONF_URL
@@ -14,6 +16,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.minidsp_rs.api import MiniDSPConnectionError
 from custom_components.minidsp_rs.const import (
+    CONF_AUDIO_SENSE_OFF_DELAY,
+    CONF_AUDIO_SENSE_OUTPUTS,
+    CONF_AUDIO_SENSE_THRESHOLD,
     CONF_DEVICE_ID,
     CONF_DEVICE_URL,
     CONF_MUTE_WITH_VOLUME,
@@ -198,6 +203,154 @@ async def test_setup_entities_and_command(hass: HomeAssistant) -> None:
         assert hass.states.get(switch_id).state == "off"
 
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_audio_sense_delays_off_and_cancels_stale_timers(
+    hass: HomeAssistant,
+) -> None:
+    """Audio sensing cannot turn off until continuous inactivity has elapsed."""
+    entry = _config_entry(
+        options={
+            CONF_AUDIO_SENSE_OUTPUTS: {
+                "0": {
+                    CONF_AUDIO_SENSE_THRESHOLD: -120.0,
+                    CONF_AUDIO_SENSE_OFF_DELAY: 15,
+                }
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+    scheduled: list[tuple[timedelta, Callable[[datetime], None], Mock]] = []
+
+    def _schedule(
+        _hass: HomeAssistant,
+        delay: timedelta,
+        action: Callable[[datetime], None],
+    ) -> Mock:
+        cancel = Mock()
+        scheduled.append((delay, action, cancel))
+        return cancel
+
+    with (
+        patch(
+            "custom_components.minidsp_rs.api.MiniDSPClient.async_get_data",
+            return_value=DATA,
+        ),
+        patch(
+            "custom_components.minidsp_rs.binary_sensor.async_call_later",
+            side_effect=_schedule,
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        registry = er.async_get(hass)
+        sensor_id = registry.async_get_entity_id(
+            "binary_sensor",
+            DOMAIN,
+            "serial:900001_audio_sense_output_1",
+        )
+        assert sensor_id is not None
+        state = hass.states.get(sensor_id)
+        assert state.state == "on"
+        assert state.attributes["threshold_dbfs"] == -120.0
+        assert state.attributes["off_delay_minutes"] == 15
+
+        coordinator = entry.runtime_data.coordinator
+        low_data = replace(
+            DATA,
+            status=replace(
+                DATA.status,
+                output_levels=(-127.0, *DATA.status.output_levels[1:]),
+            ),
+        )
+        coordinator.async_set_updated_data(low_data)
+        await hass.async_block_till_done()
+
+        assert scheduled[0][0] == timedelta(minutes=15)
+        state = hass.states.get(sensor_id)
+        assert state.state == "on"
+        assert state.attributes["inactivity_pending"] is True
+
+        coordinator.async_set_updated_data(low_data)
+        await hass.async_block_till_done()
+        assert len(scheduled) == 1
+
+        coordinator.async_set_updated_data(DATA)
+        await hass.async_block_till_done()
+        scheduled[0][2].assert_called_once_with()
+        assert hass.states.get(sensor_id).state == "on"
+        scheduled[0][1](datetime.now().astimezone())
+        assert hass.states.get(sensor_id).state == "on"
+
+        coordinator.async_set_updated_data(low_data)
+        await hass.async_block_till_done()
+        scheduled[1][1](datetime.now().astimezone())
+        assert hass.states.get(sensor_id).state == "off"
+
+        coordinator.async_set_updated_data(DATA)
+        await hass.async_block_till_done()
+        assert hass.states.get(sensor_id).state == "on"
+
+        coordinator.async_set_update_error(RuntimeError("offline"))
+        await hass.async_block_till_done()
+        state = hass.states.get(sensor_id)
+        assert state.state == "on"
+        assert state.attributes["level_available"] is False
+        scheduled[2][1](datetime.now().astimezone())
+        assert hass.states.get(sensor_id).state == "off"
+
+        coordinator.async_set_updated_data(DATA)
+        coordinator.async_set_updated_data(low_data)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        scheduled[3][2].assert_called_once_with()
+
+
+async def test_audio_sense_threshold_boundary(hass: HomeAssistant) -> None:
+    """Only levels strictly above the threshold count as active audio."""
+    entry = _config_entry(
+        options={
+            CONF_AUDIO_SENSE_OUTPUTS: {
+                "2": {
+                    CONF_AUDIO_SENSE_THRESHOLD: -120.0,
+                    CONF_AUDIO_SENSE_OFF_DELAY: 0,
+                }
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.minidsp_rs.api.MiniDSPClient.async_get_data",
+        return_value=DATA,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        registry = er.async_get(hass)
+        sensor_id = registry.async_get_entity_id(
+            "binary_sensor",
+            DOMAIN,
+            "serial:900001_audio_sense_output_3",
+        )
+        assert sensor_id is not None
+        assert hass.states.get(sensor_id).state == "off"
+
+        active_data = replace(
+            DATA,
+            status=replace(
+                DATA.status,
+                output_levels=(-55.1, -56.2, -119.9, -120.0),
+            ),
+        )
+        entry.runtime_data.coordinator.async_set_updated_data(active_data)
+        await hass.async_block_till_done()
+        assert hass.states.get(sensor_id).state == "on"
+
+        entry.runtime_data.coordinator.async_set_updated_data(DATA)
+        await hass.async_block_till_done()
+        assert hass.states.get(sensor_id).state == "off"
 
 
 async def test_scoped_volume_and_soft_mute(hass: HomeAssistant) -> None:

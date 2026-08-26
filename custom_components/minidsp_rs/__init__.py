@@ -11,7 +11,12 @@ from .const import CONF_DEVICE_URL, CONF_SERIAL
 from .coordinator import MiniDSPCoordinator
 from .data import MiniDSPConfigEntry, MiniDSPRuntimeData
 
-PLATFORMS = (Platform.MEDIA_PLAYER, Platform.SENSOR, Platform.SWITCH)
+PLATFORMS = (
+    Platform.BINARY_SENSOR,
+    Platform.MEDIA_PLAYER,
+    Platform.SENSOR,
+    Platform.SWITCH,
+)
 
 
 async def async_setup_entry(

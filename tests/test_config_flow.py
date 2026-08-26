@@ -1,5 +1,6 @@
 """Tests for the miniDSP-rs config flow."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from homeassistant import config_entries, data_entry_flow
@@ -9,6 +10,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.minidsp_rs.api import MiniDSPConnectionError
 from custom_components.minidsp_rs.const import (
+    CONF_AUDIO_SENSE_OFF_DELAY,
+    CONF_AUDIO_SENSE_OUTPUTS,
+    CONF_AUDIO_SENSE_THRESHOLD,
     CONF_DEVICE_ID,
     CONF_DEVICE_URL,
     CONF_MUTE_WITH_VOLUME,
@@ -37,6 +41,21 @@ DEVICE_2 = MiniDSPDevice(
     product_name="Flex",
     version=MiniDSPVersion(27, 100, 900002),
 )
+
+
+async def _open_options_step(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    step: str,
+) -> dict[str, object]:
+    """Open one branch of the integration options menu."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is data_entry_flow.FlowResultType.MENU
+    assert result["step_id"] == "init"
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": step},
+    )
 
 
 async def test_single_device_creates_entry(hass: HomeAssistant) -> None:
@@ -184,9 +203,9 @@ async def test_volume_options_flow(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_options_step(hass, entry, "volume")
     assert result["type"] is data_entry_flow.FlowResultType.FORM
-    assert result["step_id"] == "init"
+    assert result["step_id"] == "volume"
 
     range_options = {
         CONF_VOLUME_MIN_DB: -80.0,
@@ -220,7 +239,7 @@ async def test_volume_options_reject_invalid_range(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_options_step(hass, entry, "volume")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -245,7 +264,7 @@ async def test_five_point_options_flow(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_options_step(hass, entry, "volume")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -281,6 +300,82 @@ async def test_five_point_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert entry.options.items() >= points.items()
     assert entry.options[CONF_VOLUME_CURVE_MODE] == VOLUME_CURVE_MODE_FIVE_POINT
+
+
+async def test_audio_sense_options_flow(hass: HomeAssistant) -> None:
+    """Audio sensing can be configured independently for selected outputs."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="2x4HD (900001)",
+        unique_id="serial:900001",
+        data={CONF_URL: "http://minidsp:5380"},
+        options={CONF_VOLUME_CURVE: 0.5},
+    )
+    entry.runtime_data = SimpleNamespace(
+        coordinator=SimpleNamespace(
+            data=SimpleNamespace(
+                status=SimpleNamespace(output_levels=(-127.0,) * 4),
+            )
+        )
+    )
+    entry.add_to_hass(hass)
+
+    result = await _open_options_step(hass, entry, "audio_sense")
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "audio_sense"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_AUDIO_SENSE_OUTPUTS: ["0", "2"]},
+    )
+    assert result["step_id"] == "audio_output"
+    assert result["description_placeholders"] == {"output": "1"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_AUDIO_SENSE_THRESHOLD: -120.0,
+            CONF_AUDIO_SENSE_OFF_DELAY: 15,
+        },
+    )
+    assert result["step_id"] == "audio_output"
+    assert result["description_placeholders"] == {"output": "3"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_AUDIO_SENSE_THRESHOLD: -110.0,
+            CONF_AUDIO_SENSE_OFF_DELAY: 5,
+        },
+    )
+    assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_AUDIO_SENSE_OUTPUTS] == {
+        "0": {
+            CONF_AUDIO_SENSE_THRESHOLD: -120.0,
+            CONF_AUDIO_SENSE_OFF_DELAY: 15,
+        },
+        "2": {
+            CONF_AUDIO_SENSE_THRESHOLD: -110.0,
+            CONF_AUDIO_SENSE_OFF_DELAY: 5,
+        },
+    }
+    assert entry.options[CONF_VOLUME_CURVE] == 0.5
+
+
+async def test_audio_sense_requires_loaded_output_data(hass: HomeAssistant) -> None:
+    """Audio output selection is unavailable before status has loaded."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="2x4HD (900001)",
+        unique_id="serial:900001",
+        data={CONF_URL: "http://minidsp:5380"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await _open_options_step(hass, entry, "audio_sense")
+
+    assert result["type"] is data_entry_flow.FlowResultType.ABORT
+    assert result["reason"] == "audio_sense_unavailable"
 
 
 async def test_reconfigure_requires_same_device(hass: HomeAssistant) -> None:

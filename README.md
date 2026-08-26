@@ -81,6 +81,38 @@ The scoped range and curve shape are separate: changing the minimum or maximum c
 
 The optional 0%-volume mute moves the device to the configured minimum without sending a hardware mute command, then restores the previous gain when unmuted. This can avoid popping on systems where MiniDSP hardware mute is audible. The exact current gain and active mapping are available through the media player's volume attributes, including `volume_db`, `volume_curve_mode`, and the configured range and control points.
 
+### Per-output audio sensing
+
+Audio sensing exposes a sound binary sensor that can act as an automation hook for each selected output. Under **Configure → Audio sensing**:
+
+1. Select the outputs to monitor.
+2. Set each output's activity threshold in dBFS.
+3. Set how many minutes of inactivity are required before its sensor turns off.
+
+The default threshold is -120 dBFS and the default inactivity delay is 15 minutes. A level above the threshold turns the binary sensor on immediately. A level at or below the threshold, or unavailable output-level data, starts the delay. Audio returning before the delay expires cancels the pending turn-off, so a brief dip cannot turn an amplifier off immediately after activity starts.
+
+Use the resulting binary sensor with ordinary Home Assistant state triggers:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.minidsp_output_1_audio_detected
+    to: "on"
+    id: audio_started
+  - trigger: state
+    entity_id: binary_sensor.minidsp_output_1_audio_detected
+    to: "off"
+    id: audio_stopped
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'audio_started' }}"
+        sequence:
+          - action: script.power_on_amplifier
+    default:
+      - action: script.power_off_amplifier
+```
+
 The source list is derived from the hardware and DSP revision reported by `minidspd`. Advanced DSP configuration—routing, PEQ, crossovers, FIR, compressors, and per-channel settings—is outside the initial integration scope because the daemon status endpoint does not expose dependable readback for those settings.
 
 ## Troubleshooting

@@ -17,7 +17,15 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import MiniDSPClient, MiniDSPError, normalize_base_url
+from .audio_sense import (
+    AudioSenseConfig,
+    audio_sense_configs,
+    serialize_audio_sense_configs,
+)
 from .const import (
+    CONF_AUDIO_SENSE_OFF_DELAY,
+    CONF_AUDIO_SENSE_OUTPUTS,
+    CONF_AUDIO_SENSE_THRESHOLD,
     CONF_DEVICE_ID,
     CONF_DEVICE_URL,
     CONF_MUTE_WITH_VOLUME,
@@ -39,6 +47,7 @@ from .const import (
     DEVICE_MIN_VOLUME_DB,
     DOMAIN,
     LOGGER,
+    MAX_AUDIO_SENSE_OFF_DELAY,
     MAX_VOLUME_CURVE,
     MIN_VOLUME_CURVE,
     VOLUME_CURVE_MODE_EXPONENT,
@@ -214,11 +223,24 @@ class MiniDSPConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class MiniDSPOptionsFlow(OptionsFlowWithReload):
-    """Configure the useful media-player volume range and curve."""
+    """Configure volume behavior and per-output audio sensing."""
 
     _pending_options: dict[str, Any]
+    _audio_configs: dict[int, AudioSenseConfig]
+    _audio_selected_channels: list[int]
+    _audio_step_index: int
 
     async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose an integration feature to configure."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["volume", "audio_sense"],
+        )
+
+    async def async_step_volume(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
@@ -240,13 +262,111 @@ class MiniDSPOptionsFlow(OptionsFlowWithReload):
                 return await self.async_step_exponent()
 
         return self.async_show_form(
-            step_id="init",
+            step_id="volume",
             data_schema=self.add_suggested_values_to_schema(
                 _volume_range_schema(),
                 current if user_input is None else user_input,
             ),
             errors=errors,
         )
+
+    async def async_step_audio_sense(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Select outputs that should expose audio-sense sensors."""
+        output_count = self._output_count()
+        if output_count == 0:
+            return self.async_abort(reason="audio_sense_unavailable")
+
+        try:
+            existing = audio_sense_configs(self.config_entry.options)
+        except ValueError:
+            existing = {}
+
+        if user_input is not None:
+            self._audio_selected_channels = sorted(
+                int(channel) for channel in user_input[CONF_AUDIO_SENSE_OUTPUTS]
+            )
+            self._audio_configs = {}
+            self._audio_step_index = 0
+            if not self._audio_selected_channels:
+                return self._create_audio_sense_entry()
+            return await self.async_step_audio_output()
+
+        output_options = [
+            selector.SelectOptionDict(value=str(channel), label=f"Output {channel + 1}")
+            for channel in range(output_count)
+        ]
+        return self.async_show_form(
+            step_id="audio_sense",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required(CONF_AUDIO_SENSE_OUTPUTS): (
+                            selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=output_options,
+                                    multiple=True,
+                                )
+                            )
+                        )
+                    }
+                ),
+                {CONF_AUDIO_SENSE_OUTPUTS: [str(channel) for channel in existing]},
+            ),
+        )
+
+    async def async_step_audio_output(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure activity detection for one selected output."""
+        channel = self._audio_selected_channels[self._audio_step_index]
+        try:
+            existing = audio_sense_configs(self.config_entry.options)
+        except ValueError:
+            existing = {}
+        current = existing.get(channel, AudioSenseConfig(channel=channel))
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                config = AudioSenseConfig.from_dict(channel, user_input)
+            except TypeError, ValueError:
+                errors["base"] = "invalid_audio_sense"
+            else:
+                self._audio_configs[channel] = config
+                self._audio_step_index += 1
+                if self._audio_step_index == len(self._audio_selected_channels):
+                    return self._create_audio_sense_entry()
+                return await self.async_step_audio_output()
+
+        suggestions = current.as_dict() if user_input is None else user_input
+        return self.async_show_form(
+            step_id="audio_output",
+            data_schema=self.add_suggested_values_to_schema(
+                _audio_output_schema(),
+                suggestions,
+            ),
+            errors=errors,
+            description_placeholders={"output": str(channel + 1)},
+        )
+
+    def _create_audio_sense_entry(self) -> ConfigFlowResult:
+        """Save the selected per-output audio-sense configuration."""
+        options = dict(self.config_entry.options)
+        options[CONF_AUDIO_SENSE_OUTPUTS] = serialize_audio_sense_configs(
+            self._audio_configs
+        )
+        return self.async_create_entry(data=options)
+
+    def _output_count(self) -> int:
+        """Return the output count from the loaded coordinator."""
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        if runtime_data is None:
+            return 0
+        return len(runtime_data.coordinator.data.status.output_levels)
 
     async def async_step_exponent(
         self,
@@ -298,6 +418,32 @@ class MiniDSPOptionsFlow(OptionsFlowWithReload):
             ),
             errors=errors,
         )
+
+
+def _audio_output_schema() -> vol.Schema:
+    """Return threshold and inactivity-delay controls for one output."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_AUDIO_SENSE_THRESHOLD): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=DEVICE_MIN_VOLUME_DB,
+                    max=DEVICE_MAX_VOLUME_DB,
+                    step=0.5,
+                    unit_of_measurement="dBFS",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(CONF_AUDIO_SENSE_OFF_DELAY): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=MAX_AUDIO_SENSE_OFF_DELAY,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
 
 
 def _default_volume_options() -> dict[str, Any]:

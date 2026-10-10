@@ -32,7 +32,8 @@ class MiniDSPMediaPlayer(MiniDSPEntity, MediaPlayerEntity):
 
     _attr_icon = "mdi:audio-video"
     _attr_name = None
-    _attr_state = MediaPlayerState.IDLE
+    # The DSP reports reachability, not playback state.
+    _attr_state = MediaPlayerState.ON
     _attr_supported_features = (
         MediaPlayerEntityFeature.VOLUME_SET
         | MediaPlayerEntityFeature.VOLUME_MUTE

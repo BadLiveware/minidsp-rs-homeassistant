@@ -205,6 +205,39 @@ async def test_setup_entities_and_command(hass: HomeAssistant) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize(
+    "data",
+    [
+        DATA,
+        replace(DATA, status=replace(DATA.status, output_levels=(-127.0,) * 4)),
+        replace(
+            DATA,
+            status=replace(DATA.status, master=replace(DATA.status.master, mute=True)),
+        ),
+    ],
+    ids=["active_audio", "silent_outputs", "muted"],
+)
+async def test_media_player_is_on_when_reachable(
+    hass: HomeAssistant, data: MiniDSPData
+) -> None:
+    """Reachability, not output activity or mute, determines the player state."""
+    entry = _config_entry()
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.minidsp_rs.api.MiniDSPClient.async_get_data",
+        return_value=data,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    media_id = er.async_get(hass).async_get_entity_id(
+        "media_player", DOMAIN, "serial:900001_media_player"
+    )
+    assert media_id is not None
+    assert hass.states.get(media_id).state == "on"
+
+
 async def test_audio_sense_delays_off_and_cancels_stale_timers(
     hass: HomeAssistant,
 ) -> None:
@@ -527,3 +560,9 @@ async def test_failed_refresh_marks_entities_unavailable(hass: HomeAssistant) ->
     await hass.async_block_till_done()
 
     assert hass.states.get(media_id).state == "unavailable"
+
+    entry.runtime_data.client.async_get_data = AsyncMock(return_value=DATA)
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(media_id).state == "on"
